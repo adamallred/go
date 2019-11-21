@@ -1,29 +1,27 @@
 package context
 
 import (
-	"bytes"
+	gocontext "context"
 	"encoding/binary"
 	"io"
 	"io/ioutil"
-	"os"
-	"path/filepath"
-	"sync"
 	"time"
 
-	"github.com/syndtr/goleveldb/leveldb"
-	"github.com/syndtr/goleveldb/leveldb/opt"
-	"github.com/syndtr/goleveldb/leveldb/util"
-)
-
-const (
-	routesDbFilename = "routes.db"
-	idLogFilename    = "id"
+	"cloud.google.com/go/firestore"
+	//"golang.org/x/oauth2/google"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 )
 
 // Route is the value part of a shortcut.
 type Route struct {
-	URL  string    `json:"url"`
-	Time time.Time `json:"time"`
+	URL  string    `json:"url" firestore:"url"`
+	Time time.Time `json:"time" firestore:"time"`
+}
+
+// NextID is the next numeric ID to use for auto-generated IDs
+type NextID struct {
+	ID uint32 `json:"id" firestore:"id"`
 }
 
 // Serialize this Route into the given Writer.
@@ -58,70 +56,19 @@ func (o *Route) read(r io.Reader) error {
 
 // Context provides access to the data store.
 type Context struct {
-	path string
-	db   *leveldb.DB
-	lck  sync.Mutex
-	id   uint64
+	db *firestore.Client
 }
 
-// Commit the given ID to the data store.
-func commit(filename string, id uint64) error {
-	w, err := os.Create(filename)
-	if err != nil {
-		return err
-	}
-	defer w.Close()
-
-	if err := binary.Write(w, binary.LittleEndian, id); err != nil {
-		return err
-	}
-
-	return w.Sync()
-}
-
-// Load the current ID from the data store.
-func load(filename string) (uint64, error) {
-	if _, err := os.Stat(filename); err != nil {
-		return 0, commit(filename, 0)
-	}
-
-	r, err := os.Open(filename)
-	if err != nil {
-		return 0, err
-	}
-	defer r.Close()
-
-	var id uint64
-	if err := binary.Read(r, binary.LittleEndian, &id); err != nil {
-		return 0, err
-	}
-
-	return id, nil
-}
-
-// Open the context using path as the data store location.
-func Open(path string) (*Context, error) {
-	if _, err := os.Stat(path); err != nil {
-		if err := os.MkdirAll(path, os.ModePerm); err != nil {
-			return nil, err
-		}
-	}
-
-	// open the database
-	db, err := leveldb.OpenFile(filepath.Join(path, routesDbFilename), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	id, err := load(filepath.Join(path, idLogFilename))
+// Open the context. Instantiate a new firestore client
+func Open() (*Context, error) {
+	ctx := gocontext.Background()
+	client, err := firestore.NewClient(ctx, getGoogleProject())
 	if err != nil {
 		return nil, err
 	}
 
 	return &Context{
-		path: path,
-		db:   db,
-		id:   id,
+		db: client,
 	}, nil
 }
 
@@ -132,91 +79,138 @@ func (c *Context) Close() error {
 
 // Get retreives a shortcut from the data store.
 func (c *Context) Get(name string) (*Route, error) {
-	val, err := c.db.Get([]byte(name), nil)
+	ref := c.db.Doc("routes/" + name)
+
+	ctx, cancel := gocontext.WithTimeout(gocontext.Background(), time.Minute)
+	defer cancel()
+
+	snap, err := ref.Get(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	rt := &Route{}
-	if err := rt.read(bytes.NewBuffer(val)); err != nil {
+	var rt Route
+	if err := snap.DataTo(&rt); err != nil {
 		return nil, err
 	}
 
-	return rt, nil
+	return &rt, nil
 }
 
 // Put stores a new shortcut in the data store.
 func (c *Context) Put(key string, rt *Route) error {
-	var buf bytes.Buffer
-	if err := rt.write(&buf); err != nil {
+	ref := c.db.Doc("routes/" + key)
+
+	ctx, cancel := gocontext.WithTimeout(gocontext.Background(), time.Minute)
+	defer cancel()
+
+	_, err := ref.Create(ctx, rt)
+	if err != nil {
 		return err
 	}
 
-	return c.db.Put([]byte(key), buf.Bytes(), &opt.WriteOptions{Sync: true})
+	return nil
 }
 
 // Del removes an existing shortcut from the data store.
 func (c *Context) Del(key string) error {
-	return c.db.Delete([]byte(key), &opt.WriteOptions{Sync: true})
+	ref := c.db.Doc("routes/" + key)
+
+	ctx, cancel := gocontext.WithTimeout(gocontext.Background(), time.Minute)
+	defer cancel()
+
+	_, err := ref.Delete(ctx)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // List all routes in an iterator, starting with the key prefix of start (which can also be nil).
-func (c *Context) List(start []byte) *Iter {
-	return &Iter{
-		it: c.db.NewIterator(&util.Range{
-			Start: start,
-			Limit: nil,
-		}, nil),
-	}
-}
+// func (c *Context) List(start []byte) *Iter {
+// 	return &Iter{
+// 		it: c.db.NewIterator(&util.Range{
+// 			Start: start,
+// 			Limit: nil,
+// 		}, nil),
+// 	}
+// }
 
 // GetAll gets everything in the db to dump it out for backup purposes
 func (c *Context) GetAll() (map[string]Route, error) {
 	golinks := map[string]Route{}
-	iter := c.db.NewIterator(nil, nil)
-	defer iter.Release()
+	col := c.db.Collection("routes")
 
-	for iter.Next() {
-		key := iter.Key()
-		val := iter.Value()
-		rt := &Route{}
-		if err := rt.read(bytes.NewBuffer(val)); err != nil {
-			return nil, err
-		}
-		golinks[string(key[:])] = *rt
-	}
+	ctx, cancel := gocontext.WithTimeout(gocontext.Background(), time.Minute)
+	defer cancel()
 
-	if err := iter.Error(); err != nil {
+	routes, err := col.Documents(ctx).GetAll()
+	if err != nil {
 		return nil, err
 	}
-
+	for _, doc := range routes {
+		var rt Route
+		if err := doc.DataTo(&rt); err != nil {
+			return nil, err
+		}
+		golinks[doc.Ref.ID] = rt
+	}
 	return golinks, nil
 }
 
-func (c *Context) commit(id uint64) error {
-	w, err := os.Create(filepath.Join(c.path, idLogFilename))
-	if err != nil {
-		return err
-	}
-	defer w.Close()
-
-	if err := binary.Write(w, binary.LittleEndian, id); err != nil {
-		return err
-	}
-
-	return w.Sync()
-}
-
 // NextID generates the next numeric ID to be used for an auto-named shortcut.
-func (c *Context) NextID() (uint64, error) {
-	c.lck.Lock()
-	defer c.lck.Unlock()
+func (c *Context) NextID() (uint32, error) {
+	ref := c.db.Doc("IDs/nextID")
+	var nid uint32
 
-	c.id++
+	ctx, cancel := gocontext.WithTimeout(gocontext.Background(), time.Minute)
+	defer cancel()
 
-	if err := commit(filepath.Join(c.path, idLogFilename), c.id); err != nil {
+	err := c.db.RunTransaction(ctx, func(ctx gocontext.Context, tx *firestore.Transaction) error {
+		var nextID *NextID
+
+		doc, err := tx.Get(ref)
+		if err != nil {
+			if grpc.Code(err) == codes.NotFound {
+				// this is the very first auto-generated ID, we can make it
+				// as :1 and return it
+				nextID = new(NextID)
+				nextID.ID = 1
+				nid = 1
+				err := tx.Create(ref, nextID)
+				if err != nil {
+					return err
+				}
+				return nil
+			}
+			return err
+		}
+
+		if err := doc.DataTo(&nextID); err != nil {
+			return err
+		}
+		nextID.ID += 1
+		nid = nextID.ID
+
+		return tx.Set(ref, &nextID)
+	})
+	if err != nil {
 		return 0, err
 	}
 
-	return c.id, nil
+	return nid, nil
+}
+
+func getGoogleProject() string {
+	// TODO: take this in as an flag
+	return "aallred-sawa-poc"
+	// ctx, cancel := gocontext.WithTimeout(gocontext.Background(), time.Second*5)
+	// defer cancel()
+
+	// creds, err := google.FindDefaultCredentials(ctx)
+	// if err != nil {
+	// 	return ""
+	// }
+	// return creds.ProjectID
 }

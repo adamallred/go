@@ -7,8 +7,12 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/spf13/viper"
+
 	"github.com/kellegous/go/context"
-	"github.com/syndtr/goleveldb/leveldb"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 )
 
 // Serve a bundled asset over HTTP.
@@ -48,7 +52,7 @@ func getDefault(ctx *context.Context, w http.ResponseWriter, r *http.Request) {
 	}
 
 	rt, err := ctx.Get(p)
-	if err == leveldb.ErrNotFound {
+	if grpc.Code(err) == codes.NotFound {
 		http.Redirect(w, r,
 			fmt.Sprintf("/edit/%s", cleanName(p)),
 			http.StatusTemporaryRedirect)
@@ -81,15 +85,19 @@ func getLinks(ctx *context.Context, w http.ResponseWriter, r *http.Request) {
 
 // ListenAndServe sets up all web routes, binds the port and handles incoming
 // web requests.
-func ListenAndServe(addr string, admin bool, version string, ctx *context.Context) error {
+func ListenAndServe(ctx *context.Context) error {
+	addr := viper.GetString("addr")
+	admin := viper.GetBool("admin")
+	version := viper.GetString("version")
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/url/", func(w http.ResponseWriter, r *http.Request) {
 		apiURL(ctx, w, r)
 	})
-	mux.HandleFunc("/api/urls/", func(w http.ResponseWriter, r *http.Request) {
-		apiURLs(ctx, w, r)
-	})
+	// mux.HandleFunc("/api/urls/", func(w http.ResponseWriter, r *http.Request) {
+	// 	apiURLs(ctx, w, r)
+	// })
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		getDefault(ctx, w, r)
 	})
