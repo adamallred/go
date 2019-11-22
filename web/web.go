@@ -95,9 +95,9 @@ func ListenAndServe(ctx *context.Context) error {
 	mux.HandleFunc("/api/url/", func(w http.ResponseWriter, r *http.Request) {
 		apiURL(ctx, w, r)
 	})
-	// mux.HandleFunc("/api/urls/", func(w http.ResponseWriter, r *http.Request) {
-	// 	apiURLs(ctx, w, r)
-	// })
+	mux.HandleFunc("/api/urls/", func(w http.ResponseWriter, r *http.Request) {
+		apiURLs(ctx, w, r)
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		getDefault(ctx, w, r)
 	})
