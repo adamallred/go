@@ -1,0 +1,10 @@
+ID="$USER"
+NAME="go-links-$ID"
+PROJECT=aallred-sawa-poc
+IAM_ACCOUNT="go-links-${ID}@${PROJECT}.iam.gserviceaccount.com"
+
+VERSION="$(git rev-parse HEAD)"
+REGISTRY="us.gcr.io/$PROJECT"
+IMAGEBASE="$REGISTRY/$NAME"
+
+REGION=us-east1

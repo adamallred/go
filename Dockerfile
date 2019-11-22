@@ -1,15 +1,15 @@
-FROM alpine
+FROM dockerfactory.rsglab.com/rsg/golang/golang:1.13.4 AS builder
 
-ENV GOPATH /go
-COPY . /go/src/github.com/kellegous/go
-RUN apk update \
-  && apk add go git musl-dev \
-  && go get github.com/kellegous/go \
-  && apk del go git musl-dev \
-  && rm -rf /var/cache/apk/* \
-  && rm -rf /go/src /go/pkg \
-  && mkdir /data
+ARG CGO_ENABLED=0
+ARG GOOS=linux
+ARG GOARCH=amd64
+ARG GO111MODULE=on
 
-EXPOSE 8067
+COPY . /src
+RUN cd /src && go build -mod=vendor -o /tmp/go-links ./cmd/go-links
 
-CMD ["/go/bin/go", "--data=/data"]
+FROM gcr.io/distroless/base
+
+COPY --from=builder /tmp/go-links /usr/bin/
+
+ENTRYPOINT ["/usr/bin/go-links" ]
