@@ -10,6 +10,7 @@ require (
 	github.com/spf13/viper v1.5.0
 	github.com/syndtr/goleveldb v1.0.0
 	golang.org/x/oauth2 v0.0.0-20190604053449-0f29369cfe45
+	google.golang.org/api v0.9.0
 	google.golang.org/grpc v1.24.0
 	gopkg.rsglab.com/rsg/populus v0.24.0 // indirect
 )
