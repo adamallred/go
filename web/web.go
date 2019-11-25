@@ -2,10 +2,12 @@ package web
 
 import (
 	"bytes"
+	gocontext "context"
 	"fmt"
 	"html/template"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/spf13/viper"
 
@@ -51,7 +53,10 @@ func getDefault(ctx *context.Context, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rt, err := ctx.Get(p)
+	goctx, cancel := gocontext.WithTimeout(gocontext.Background(), time.Minute)
+	defer cancel()
+
+	rt, err := ctx.Get(goctx, p)
 	if grpc.Code(err) == codes.NotFound {
 		http.Redirect(w, r,
 			fmt.Sprintf("/edit/%s", cleanName(p)),
@@ -73,7 +78,10 @@ func getLinks(ctx *context.Context, w http.ResponseWriter, r *http.Request) {
 		log.Panic(err)
 	}
 
-	rts, err := ctx.GetAll()
+	goctx, cancel := gocontext.WithTimeout(gocontext.Background(), time.Minute)
+	defer cancel()
+
+	rts, err := ctx.GetAll(goctx)
 	if err != nil {
 		log.Panic(err)
 	}

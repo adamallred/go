@@ -1,7 +1,10 @@
 package web
 
 import (
+	gocontext "context"
+
 	"net/http"
+	"time"
 
 	"github.com/kellegous/go/context"
 )
@@ -19,7 +22,10 @@ func adminGet(ctx *context.Context, w http.ResponseWriter, r *http.Request) {
 	}
 
 	if p == "dumps" {
-		if golinks, err := ctx.GetAll(); err != nil {
+		goctx, cancel := gocontext.WithTimeout(gocontext.Background(), time.Minute)
+		defer cancel()
+
+		if golinks, err := ctx.GetAll(goctx); err != nil {
 			writeJSONBackendError(w, err)
 			return
 		} else {
